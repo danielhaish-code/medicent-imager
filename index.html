@@ -12,34 +12,50 @@
   #results { display: flex; flex-direction: column; align-items: center; margin-top: 25px; gap: 25px; }
 
   .card {
-    position: relative; background: #fff; width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    position: relative; background: #fff; width: 360px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     border-radius: 10px; overflow: hidden; text-align: center; transition: transform 0.2s;
+    padding-bottom: 15px;
   }
   .card:hover { transform: scale(1.02); }
 
-  .image-container { position: relative; width: 100%; height: 240px; overflow: hidden; }
-  .image-container img { width: 100%; height: 240px; object-fit: cover; display: block; }
+  .image-container { position: relative; width: 100%; overflow: hidden; }
+  .image-container img { width: 100%; height: auto; display: block; }
+
+  /* Hover description overlay */
+  .hover-desc {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.75);
+    color: white; padding: 10px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    font-size: 14px;
+    text-align: left;
+  }
+  .image-container:hover .hover-desc { opacity: 1; }
 
   .desc {
-    position: absolute; bottom: 0; left: 0; right: 0;
-    background: rgba(0,0,0,0.75); color: white; padding: 10px;
-    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    margin-top: 5px;
+    color: #333;
+    font-size: 14px;
+    text-align: left;
+    padding: 0 10px;
   }
-  .image-container:hover .desc { opacity: 1; }
 
-  .controls { display: flex; justify-content: space-between; padding: 10px 20px 15px; }
+  .controls { display: flex; justify-content: space-between; padding: 10px 20px 0; }
   .controls button {
     background: #007bff; border: none; color: white; padding: 6px 12px;
     border-radius: 5px; cursor: pointer;
   }
   .controls button:hover { background: #0056b3; }
+
+  .wiki-link { font-size: 12px; color: #007bff; display: block; margin-top: 5px; }
 </style>
 </head>
 <body>
 
 <h1>Wikipedia Fuzzy Image Browser</h1>
 
-<textarea id="inputText" placeholder="Enter text (e.g. red fox with tail,  big cat.  flying pig.)"></textarea><br>
+<textarea id="inputText" placeholder="Enter text (e.g. anterior median fissure, central canal, choroid plexus)"></textarea><br>
 <button onclick="searchWiki()">Search</button>
 
 <div id="results"></div>
@@ -48,17 +64,10 @@
 async function searchWiki() {
   const input = document.getElementById('inputText').value.trim();
 
-  // --- SPLITTING RULES ---
-  // 1. Split by commas, dots, or two+ spaces
-  // 2. Keep single spaces within a phrase (limit each to max 4 spaces)
   let rawWords = input.split(/(?:,|\.\s*| {2,})+/).map(w => w.trim()).filter(Boolean);
-
-  // Enforce max 4 spaces per phrase (so 5 words total)
   const words = rawWords.map(w => {
     const parts = w.split(/\s+/);
-    if (parts.length > 5) {
-      return parts.slice(0, 5).join(' ');
-    }
+    if (parts.length > 5) return parts.slice(0,5).join(' ');
     return w;
   });
 
@@ -72,69 +81,42 @@ async function searchWiki() {
     resultsDiv.appendChild(card);
 
     try {
-      // Fuzzy search for the word
-      const searchRes = await fetch(
-        `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word)}&utf8=&format=json&origin=*`
-      );
-      const searchData = await searchRes.json();
-      if (!searchData.query.search.length) {
-        card.innerHTML = `<h3>${word}</h3><p>No result found.</p>`;
-        continue;
-      }
+      let bestTitle = await getBestWikiTitle(word);
 
-      const bestTitle = searchData.query.search[0].title;
-
-      // Get summary
-      const summaryRes = await fetch(
+      // --- Get page summary ---
+      let summaryRes = await fetch(
         `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(bestTitle)}`
       );
-      const summaryData = await summaryRes.json();
-      const description = summaryData.extract || "No description available.";
+      let summaryData = await summaryRes.json();
+      let pageDescription = summaryData.extract || "No description available.";
 
-      // Get multiple images
-      const imageRes = await fetch(
-        `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(bestTitle)}&prop=images&format=json&origin=*`
-      );
-      const imageData = await imageRes.json();
-      const page = Object.values(imageData.query.pages)[0];
-      const images = (page.images || [])
-        .map(img => img.title)
-        .filter(t => /\.(jpg|jpeg|png|gif)$/i.test(t))
-        .slice(0, 10);
+      // --- Get images ---
+      let imageUrls = await getWikiImages(bestTitle);
 
-      let imageUrls = [];
-      for (const imgTitle of images) {
-        const imageInfoRes = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imgTitle)}&prop=imageinfo&iiprop=url&format=json&origin=*`
-        );
-        const infoData = await imageInfoRes.json();
-        const filePage = Object.values(infoData.query.pages)[0];
-        if (filePage?.imageinfo?.[0]?.url) {
-          imageUrls.push(filePage.imageinfo[0].url);
-        }
-      }
-
-      // Fallback thumbnail
-      if (imageUrls.length === 0 && summaryData.thumbnail) {
-        imageUrls = [summaryData.thumbnail.source];
-      }
-
-      if (imageUrls.length === 0) {
+      if (!imageUrls.length) {
         card.innerHTML = `<h3>${bestTitle}</h3><p>No images found.</p>`;
         continue;
       }
 
       let index = 0;
+
       const imgContainer = document.createElement('div');
       imgContainer.className = 'image-container';
 
       const imgEl = document.createElement('img');
-      imgEl.src = imageUrls[index];
+      imgEl.src = imageUrls[index].url;
       imgContainer.appendChild(imgEl);
 
+      // Hover description (page summary)
+      const hoverDesc = document.createElement('div');
+      hoverDesc.className = 'hover-desc';
+      hoverDesc.textContent = pageDescription;
+      imgContainer.appendChild(hoverDesc);
+
+      // Image-specific description below
       const descEl = document.createElement('div');
       descEl.className = 'desc';
-      descEl.textContent = description;
+      descEl.textContent = imageUrls[index].desc || pageDescription;
       imgContainer.appendChild(descEl);
 
       const controls = document.createElement('div');
@@ -144,28 +126,78 @@ async function searchWiki() {
       prevBtn.textContent = 'Previous';
       prevBtn.onclick = () => {
         index = (index - 1 + imageUrls.length) % imageUrls.length;
-        imgEl.src = imageUrls[index];
+        imgEl.src = imageUrls[index].url;
+        descEl.textContent = imageUrls[index].desc || pageDescription;
       };
 
       const nextBtn = document.createElement('button');
       nextBtn.textContent = 'Next';
       nextBtn.onclick = () => {
         index = (index + 1) % imageUrls.length;
-        imgEl.src = imageUrls[index];
+        imgEl.src = imageUrls[index].url;
+        descEl.textContent = imageUrls[index].desc || pageDescription;
       };
 
       controls.appendChild(prevBtn);
       controls.appendChild(nextBtn);
 
+      const wikiLink = document.createElement('a');
+      wikiLink.href = `https://en.wikipedia.org/wiki/${encodeURIComponent(bestTitle)}`;
+      wikiLink.target = '_blank';
+      wikiLink.className = 'wiki-link';
+      wikiLink.textContent = `View "${bestTitle}" on Wikipedia`;
+
       card.innerHTML = `<h3>${bestTitle}</h3>`;
       card.appendChild(imgContainer);
       card.appendChild(controls);
+      card.appendChild(wikiLink);
 
     } catch (error) {
       console.error(error);
       card.innerHTML = `<h3>${word}</h3><p>Error fetching data.</p>`;
     }
   }
+}
+
+// --- Helper: fuzzy Wikipedia search ---
+async function getBestWikiTitle(word) {
+  let searchRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word)}&utf8=&format=json&origin=*`
+  );
+  let searchData = await searchRes.json();
+  if (searchData.query.search.length) return searchData.query.search[0].title;
+
+  // fallback: try adding "of spinal cord"
+  searchRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word + " of spinal cord")}&utf8=&format=json&origin=*`
+  );
+  searchData = await searchRes.json();
+  if (searchData.query.search.length) return searchData.query.search[0].title;
+
+  return word;
+}
+
+// --- Helper: fetch images with original resolution and description ---
+async function getWikiImages(title) {
+  const imageRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=images&format=json&origin=*`
+  );
+  const imageData = await imageRes.json();
+  const page = Object.values(imageData.query.pages)[0];
+  const images = (page.images || []).filter(img => /\.(jpg|jpeg|png|gif)$/i.test(img.title)).slice(0, 10);
+
+  let imageUrls = [];
+  for (const imgTitle of images) {
+    const infoRes = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imgTitle.title)}&prop=imageinfo&iiprop=url|comment&format=json&origin=*`
+    );
+    const infoData = await infoRes.json();
+    const filePage = Object.values(infoData.query.pages)[0];
+    if (filePage?.imageinfo?.[0]?.url) {
+      imageUrls.push({ url: filePage.imageinfo[0].url, desc: filePage.imageinfo[0].comment });
+    }
+  }
+  return imageUrls;
 }
 </script>
 
