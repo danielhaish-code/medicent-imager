@@ -1,218 +1,173 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Word Image Search (Google API)</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            background-color: #f8f9fa;
-        }
-        h1 {
-            color: #333;
-        }
-        .input-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        input[type="text"] {
-            width: 100%;
-            padding: 10px;
-            font-size: 1em;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-        }
-        .btn {
-            margin-top: 10px;
-            padding: 10px 20px;
-            background-color: #007BFF;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .btn:hover {
-            background-color: #0056b3;
-        }
-        #container {
-            margin-top: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 30px;
-        }
-        .image-container {
-            text-align: center;
-        }
-        .image-container img {
-            max-width: 100%;
-            border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-        }
-        .button-container {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-        }
-        .clear-btn {
-            background-color: #dc3545;
-        }
-        .clear-btn:hover {
-            background-color: #c82333;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wikipedia Fuzzy Image Browser</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #f8f8f8; padding: 20px; }
+  h1 { text-align: center; }
+  textarea { width: 100%; height: 120px; font-size: 16px; padding: 10px; }
+  button { margin-top: 10px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
+  #results { display: flex; flex-direction: column; align-items: center; margin-top: 25px; gap: 25px; }
+
+  .card {
+    position: relative; background: #fff; width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    border-radius: 10px; overflow: hidden; text-align: center; transition: transform 0.2s;
+  }
+  .card:hover { transform: scale(1.02); }
+
+  .image-container { position: relative; width: 100%; height: 240px; overflow: hidden; }
+  .image-container img { width: 100%; height: 240px; object-fit: cover; display: block; }
+
+  .desc {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.75); color: white; padding: 10px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+  }
+  .image-container:hover .desc { opacity: 1; }
+
+  .controls { display: flex; justify-content: space-between; padding: 10px 20px 15px; }
+  .controls button {
+    background: #007bff; border: none; color: white; padding: 6px 12px;
+    border-radius: 5px; cursor: pointer;
+  }
+  .controls button:hover { background: #0056b3; }
+</style>
 </head>
 <body>
-    <h1>Google Image Search Viewer</h1>
-    <p>Enter your Google API key, Custom Search Engine ID, and list of words to fetch the first image for each.</p>
-    
-    <div class="input-group">
-        <label for="apiKey">Google API Key:</label>
-        <input type="text" id="apiKey" placeholder="Enter your Google API key here">
-    </div>
-    
-    <div class="input-group">
-        <label for="cx">Custom Search Engine (CSE) ID:</label>
-        <input type="text" id="cx" placeholder="Enter your Custom Search Engine ID">
-    </div>
-    
-    <div class="input-group">
-        <label for="searchWords">Words to Search (comma, dot, or double space separated):</label>
-        <input type="text" id="searchWords" placeholder="e.g. cat, dog, body part">
-    </div>
-    
-    <button class="btn" onclick="searchImages()">Search Images</button>
-    <button class="btn clear-btn" onclick="clearResults()">Clear Results</button>
-    
-    <div id="container"></div>
 
-    <script>
-        let imageResults = {};
+<h1>Wikipedia Fuzzy Image Browser</h1>
 
-        async function searchImages() {
-            const apiKey = document.getElementById('apiKey').value.trim();
-            const cx = document.getElementById('cx').value.trim();
-            const wordsInput = document.getElementById('searchWords').value.trim();
-            const container = document.getElementById('container');
-            
-            if (!apiKey || !cx || !wordsInput) {
-                alert('Please enter your API Key, CSE ID, and at least one word.');
-                return;
-            }
+<textarea id="inputText" placeholder="Enter text (e.g. red fox with tail,  big cat.  flying pig.)"></textarea><br>
+<button onclick="searchWiki()">Search</button>
 
-            const words = parseSearchWords(wordsInput);
-            for (const word of words) {
-                try {
-                    const response = await fetch(`https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent('body ' + word)}&searchType=image&key=${apiKey}&cx=${cx}`);
-                    const data = await response.json();
-                    
-                    if (data.items && data.items.length > 0) {
-                        imageResults[word] = { images: data.items, index: 0 };
-                        displayImage(word, data.items[0].link);
-                    } else {
-                        displayMessage(word, '? No images found.');
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    displayMessage(word, '?? Error fetching images.');
-                }
-            }
+<div id="results"></div>
+
+<script>
+async function searchWiki() {
+  const input = document.getElementById('inputText').value.trim();
+
+  // --- SPLITTING RULES ---
+  // 1. Split by commas, dots, or two+ spaces
+  // 2. Keep single spaces within a phrase (limit each to max 4 spaces)
+  let rawWords = input.split(/(?:,|\.\s*| {2,})+/).map(w => w.trim()).filter(Boolean);
+
+  // Enforce max 4 spaces per phrase (so 5 words total)
+  const words = rawWords.map(w => {
+    const parts = w.split(/\s+/);
+    if (parts.length > 5) {
+      return parts.slice(0, 5).join(' ');
+    }
+    return w;
+  });
+
+  const resultsDiv = document.getElementById('results');
+  resultsDiv.innerHTML = '';
+
+  for (const word of words) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<h3>${word}</h3><p>Searching...</p>`;
+    resultsDiv.appendChild(card);
+
+    try {
+      // Fuzzy search for the word
+      const searchRes = await fetch(
+        `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word)}&utf8=&format=json&origin=*`
+      );
+      const searchData = await searchRes.json();
+      if (!searchData.query.search.length) {
+        card.innerHTML = `<h3>${word}</h3><p>No result found.</p>`;
+        continue;
+      }
+
+      const bestTitle = searchData.query.search[0].title;
+
+      // Get summary
+      const summaryRes = await fetch(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(bestTitle)}`
+      );
+      const summaryData = await summaryRes.json();
+      const description = summaryData.extract || "No description available.";
+
+      // Get multiple images
+      const imageRes = await fetch(
+        `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(bestTitle)}&prop=images&format=json&origin=*`
+      );
+      const imageData = await imageRes.json();
+      const page = Object.values(imageData.query.pages)[0];
+      const images = (page.images || [])
+        .map(img => img.title)
+        .filter(t => /\.(jpg|jpeg|png|gif)$/i.test(t))
+        .slice(0, 10);
+
+      let imageUrls = [];
+      for (const imgTitle of images) {
+        const imageInfoRes = await fetch(
+          `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imgTitle)}&prop=imageinfo&iiprop=url&format=json&origin=*`
+        );
+        const infoData = await imageInfoRes.json();
+        const filePage = Object.values(infoData.query.pages)[0];
+        if (filePage?.imageinfo?.[0]?.url) {
+          imageUrls.push(filePage.imageinfo[0].url);
         }
+      }
 
-        function parseSearchWords(wordsInput) {
-            // Replace any commas, dots, or multiple spaces with a single space and split by space
-            return wordsInput
-                .replace(/[.,]+/g, ' ')      // Replace commas or dots with a space
-                .replace(/\s{2,}/g, ' ')      // Replace multiple spaces with a single space
-                .split(' ')                   // Split the string by single spaces
-                .map(word => word.trim())     // Trim any leading or trailing whitespace from each word
-                .filter(Boolean);             // Remove empty words (in case of extra spaces)
-        }
+      // Fallback thumbnail
+      if (imageUrls.length === 0 && summaryData.thumbnail) {
+        imageUrls = [summaryData.thumbnail.source];
+      }
 
-        function displayImage(word, imageUrl) {
-            const container = document.getElementById('container');
+      if (imageUrls.length === 0) {
+        card.innerHTML = `<h3>${bestTitle}</h3><p>No images found.</p>`;
+        continue;
+      }
 
-            const imageContainer = document.createElement('div');
-            imageContainer.classList.add('image-container');
-            imageContainer.setAttribute('data-word', word);
+      let index = 0;
+      const imgContainer = document.createElement('div');
+      imgContainer.className = 'image-container';
 
-            const title = document.createElement('h3');
-            title.textContent = word;
+      const imgEl = document.createElement('img');
+      imgEl.src = imageUrls[index];
+      imgContainer.appendChild(imgEl);
 
-            const img = document.createElement('img');
-            img.src = imageUrl;
-            img.alt = word;
+      const descEl = document.createElement('div');
+      descEl.className = 'desc';
+      descEl.textContent = description;
+      imgContainer.appendChild(descEl);
 
-            const buttonContainer = document.createElement('div');
-            buttonContainer.classList.add('button-container');
+      const controls = document.createElement('div');
+      controls.className = 'controls';
 
-            const prevButton = document.createElement('button');
-            prevButton.classList.add('btn');
-            prevButton.textContent = 'Previous Image';
-            prevButton.onclick = () => showPreviousImage(word, img);
+      const prevBtn = document.createElement('button');
+      prevBtn.textContent = 'Previous';
+      prevBtn.onclick = () => {
+        index = (index - 1 + imageUrls.length) % imageUrls.length;
+        imgEl.src = imageUrls[index];
+      };
 
-            const nextButton = document.createElement('button');
-            nextButton.classList.add('btn');
-            nextButton.textContent = 'Next Image';
-            nextButton.onclick = () => showNextImage(word, img);
+      const nextBtn = document.createElement('button');
+      nextBtn.textContent = 'Next';
+      nextBtn.onclick = () => {
+        index = (index + 1) % imageUrls.length;
+        imgEl.src = imageUrls[index];
+      };
 
-            buttonContainer.appendChild(prevButton);
-            buttonContainer.appendChild(nextButton);
+      controls.appendChild(prevBtn);
+      controls.appendChild(nextBtn);
 
-            imageContainer.appendChild(title);
-            imageContainer.appendChild(img);
-            imageContainer.appendChild(buttonContainer);
+      card.innerHTML = `<h3>${bestTitle}</h3>`;
+      card.appendChild(imgContainer);
+      card.appendChild(controls);
 
-            container.appendChild(imageContainer);
-        }
+    } catch (error) {
+      console.error(error);
+      card.innerHTML = `<h3>${word}</h3><p>Error fetching data.</p>`;
+    }
+  }
+}
+</script>
 
-        function displayMessage(word, message) {
-            const container = document.getElementById('container');
-            const msgDiv = document.createElement('div');
-            msgDiv.classList.add('image-container');
-            msgDiv.innerHTML = `<h3>${word}</h3><p>${message}</p>`;
-            container.appendChild(msgDiv);
-        }
-
-        function showNextImage(word, imgElement) {
-            const result = imageResults[word];
-            if (!result) return;
-
-            result.index++;
-            if (result.index >= result.images.length) {
-                alert('No more images available for this word.');
-                result.index = result.images.length - 1;
-                return;
-            }
-
-            imgElement.src = result.images[result.index].link;
-        }
-
-        function showPreviousImage(word, imgElement) {
-            const result = imageResults[word];
-            if (!result) return;
-
-            result.index--;
-            if (result.index < 0) {
-                alert('No previous images available for this word.');
-                result.index = 0;
-                return;
-            }
-
-            imgElement.src = result.images[result.index].link;
-        }
-
-        function clearResults() {
-            // Clear all results from the container
-            const container = document.getElementById('container');
-            container.innerHTML = '';  // This clears the entire container
-            imageResults = {};  // Reset the results object
-        }
-    </script>
 </body>
 </html>
