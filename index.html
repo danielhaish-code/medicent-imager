@@ -3,19 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Wikipedia Fuzzy Image Browser (with Sub Links)</title>
+<title>Wikipedia Fuzzy Image Browser</title>
 <style>
 body { font-family: Arial, sans-serif; background: #f8f8f8; padding: 20px; }
 h1 { text-align: center; }
 textarea, input { width: 100%; font-size: 16px; padding: 10px; margin-bottom: 10px; }
 button { margin-top: 5px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
-#wrapper { max-width: 900px; margin: auto; }
+#wrapper { max-width: 1200px; margin: auto; }
 #results { display: flex; flex-direction: column; align-items: center; margin-top: 25px; gap: 25px; }
 
 .card {
-  background: #fff; width: 320px; border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-  overflow: hidden; text-align: center; transition: transform 0.2s;
+    position: relative; background: #fff; width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    border-radius: 10px; overflow: hidden; text-align: center; transition: transform 0.2s;
 }
 .card:hover { transform: scale(1.02); }
 
@@ -23,232 +22,257 @@ button { margin-top: 5px; padding: 10px 20px; font-size: 16px; cursor: pointer; 
 .image-container img { width: 100%; object-fit: contain; display: block; }
 
 .desc {
-  position: absolute; bottom: 0; left: 0; right: 0;
-  background: rgba(0,0,0,0.75); color: white; padding: 10px;
-  opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.75); color: white; padding: 10px;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
 }
 .image-container:hover .desc { opacity: 1; }
 
-.controls { display: flex; justify-content: space-between; padding: 10px; }
+.controls { display: flex; justify-content: space-between; padding: 10px 20px 15px; }
 .controls button {
-  background: #007bff; color: white; border: none; border-radius: 5px; padding: 5px 10px;
+    background: #007bff; border: none; color: white; padding: 6px 12px;
+    border-radius: 5px; cursor: pointer;
 }
 .controls button:hover { background: #0056b3; }
 
-.page-desc { padding: 10px; background: #f1f1f1; }
-.wikilink { color: #007bff; text-decoration: none; display: block; margin-bottom: 5px; }
+.page-desc { text-align: left; padding: 10px; background: #f1f1f1; }
+.wikilink { display: inline-block; margin-bottom: 5px; font-weight: bold; color: #007bff; text-decoration: none; }
 .wikilink:hover { text-decoration: underline; }
 
-.sub-results { margin-top: 10px; border-left: 3px solid #007bff; padding-left: 10px; }
-
-#modalOverlay {
-  display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: rgba(0,0,0,0.7); justify-content: center; align-items: center;
-  z-index: 1000;
-}
-#modalBox {
-  background: #fff; border-radius: 10px; padding: 20px; width: 90%; max-width: 400px;
-  display: flex; flex-direction: column; max-height: 80vh;
-}
-#modalLinks { flex-grow: 1; overflow-y: auto; margin-bottom: 10px; border: 1px solid #ccc; padding: 10px; }
-#modalButtons {
-  position: sticky; bottom: 0; background: white; text-align: right;
-  border-top: 1px solid #ccc; padding-top: 10px;
-}
-#modalButtons button {
-  background: #007bff; color: white; border: none; border-radius: 5px; padding: 8px 12px; margin-left: 5px;
-}
+.sub-links-container { display: flex; flex-direction: column; align-items: flex-start; margin-top: 10px; }
+.sub-link-item { display: flex; align-items: center; gap: 5px; }
+.slider-container { margin: 15px 0; text-align: center; }
 </style>
 </head>
 <body>
 <div id="wrapper">
-<h1>Wikipedia Fuzzy Image Browser (with Sub Links)</h1>
-<textarea id="inputText" placeholder="Enter topics (comma-separated)"></textarea>
+<h1>Wikipedia Fuzzy Image Browser</h1>
+
+<textarea id="inputText" placeholder="Enter search words separated by comma, dot, or double space"></textarea>
+<textarea id="ignoreText" placeholder="Enter words to ignore, separated by comma, dot, or double space"></textarea>
+<br>
 <button onclick="searchWiki()">Search</button>
+<button onclick="clearResults()">Clear</button>
+
+<div class="slider-container">
+    <label for="widthSlider">Card width:</label>
+    <input type="range" id="widthSlider" min="200" max="800" value="320" oninput="updateCardWidth(this.value)">
+</div>
+
 <div id="results"></div>
 </div>
 
-<!-- Modal -->
-<div id="modalOverlay">
-  <div id="modalBox">
-    <h2>Select sub-links to scrape</h2>
-    <div id="modalLinks"></div>
-    <div id="modalButtons">
-      <button id="scrapeSelectedBtn">Scrape Selected</button>
-      <button id="cancelBtn">Cancel</button>
-    </div>
-  </div>
-</div>
-
 <script>
-let currentParentCard = null;
+// Cookie helpers
+function setCookie(name, value, days=365) {
+    const d = new Date();
+    d.setTime(d.getTime() + (days*24*60*60*1000));
+    document.cookie = name + "=" + encodeURIComponent(JSON.stringify(value)) + ";path=/;expires=" + d.toUTCString();
+}
+function getCookie(name) {
+    const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+    return v ? JSON.parse(decodeURIComponent(v[2])) : null;
+}
 
-// 🔍 Main search/scrape logic
-async function searchWiki(input, parentCard = null) {
-  const query = typeof input === "string" ? input : document.getElementById("inputText").value.trim();
-  if (!query) return console.log("⚠️ No input provided.");
+function updateCardWidth(val){
+    document.querySelectorAll('.card').forEach(c => c.style.width = val + 'px');
+}
 
-  const words = query.split(/[,]+/).map(w => w.trim()).filter(Boolean);
-  console.log("🔍 Searching for:", words);
+// Clear results
+function clearResults(){
+    document.getElementById('results').innerHTML = "";
+}
 
-  const results = document.getElementById("results");
+// Main search
+async function searchWiki() {
+    const input = document.getElementById('inputText').value.trim();
+    const ignoreInput = document.getElementById('ignoreText').value.trim();
 
-  for (const word of words) {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `<h3>🔎 Loading: ${word}</h3>`;
+    let rawWords = input.split(/(?:,|\.\s*| {2,})+/).map(w => w.trim()).filter(Boolean);
+    let ignoreWords = ignoreInput.split(/(?:,|\.\s*| {2,})+/).map(w => w.trim().toLowerCase()).filter(Boolean);
+    rawWords = rawWords.filter(w => !ignoreWords.includes(w.toLowerCase()));
+    const words = rawWords.map(w => w.split(/\s+/).slice(0,5).join(' '));
 
-    if (parentCard) {
-      let sub = parentCard.querySelector(".sub-results");
-      if (!sub) {
-        sub = document.createElement("div");
-        sub.className = "sub-results";
-        parentCard.appendChild(sub);
-      }
-      sub.appendChild(card);
-    } else {
-      results.appendChild(card);
+    const resultsDiv = document.getElementById('results');
+    let cachedImages = getCookie("wikiImages") || {};
+
+    for(const word of words){
+        await searchSingleWiki(word, resultsDiv, cachedImages);
     }
+    setCookie("wikiImages", cachedImages);
+}
 
-    try {
-      // Summary API
-      const summaryRes = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(word)}`);
-      const summaryData = await summaryRes.json();
-      if (!summaryData.title) {
-        card.innerHTML = `<p>No page found for ${word}</p>`;
-        continue;
-      }
+// Single search
+async function searchSingleWiki(word, parentEl, cachedImages){
+    const card = document.createElement('div');
+    card.className = 'card';
+    parentEl.appendChild(card);
 
-      card.innerHTML = `
-        <a class="wikilink" href="${summaryData.content_urls.desktop.page}" target="_blank">${summaryData.title}</a>
-        <div class="page-desc">${summaryData.extract || "(no summary)"}</div>
-      `;
+    try{
+        let bestTitle = null;
+        const searchRes = await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(word)}&utf8=&format=json&origin=*`
+        );
+        const searchData = await searchRes.json();
+        bestTitle = searchData.query.search.length>0 ? searchData.query.search[0].title : word;
 
-      // Image query
-      const imageRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(summaryData.title)}&prop=images&format=json&origin=*`);
-      const imageData = await imageRes.json();
-      const page = Object.values(imageData.query.pages)[0];
-      const imageTitles = (page.images || []).map(img => img.title).filter(t => /\.(jpg|jpeg|png|gif)$/i.test(t)).slice(0,10);
-
-      const images = [];
-      for (const imgTitle of imageTitles) {
-        const infoRes = await fetch(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imgTitle)}&prop=imageinfo&iiprop=url|extmetadata&format=json&origin=*`);
-        const infoData = await infoRes.json();
-        const filePage = Object.values(infoData.query.pages)[0];
-        if (filePage?.imageinfo?.[0]?.url) {
-          images.push({
-            url: filePage.imageinfo[0].url,
-            desc: filePage.imageinfo[0].extmetadata?.ImageDescription?.value || ""
-          });
+        const summaryRes = await fetch(
+            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(bestTitle)}`
+        );
+        const summaryData = await summaryRes.json();
+        if(summaryData.type === "https://mediawiki.org/wiki/HyperSwitch/errors/not_found"){
+            card.innerHTML = `<h3>${word}</h3><p>No result found.</p>`;
+            return;
         }
-      }
 
-      // Display image (if any)
-      if (images.length > 0) {
-        let index = 0;
-        const imgContainer = document.createElement("div");
-        imgContainer.className = "image-container";
+        bestTitle = summaryData.title;
+        const generalDescText = summaryData.extract || "No description available.";
 
-        const imgEl = document.createElement("img");
-        imgEl.src = images[index].url;
-        imgContainer.appendChild(imgEl);
+        // Title link
+        const wikiLink = document.createElement('a');
+        wikiLink.href = summaryData.content_urls?.desktop?.page || '#';
+        wikiLink.textContent = bestTitle;
+        wikiLink.target = "_blank";
+        wikiLink.className = 'wikilink';
+        card.appendChild(wikiLink);
 
-        const descEl = document.createElement("div");
-        descEl.className = "desc";
-        descEl.textContent = images[index].desc || "";
-        imgContainer.appendChild(descEl);
-
-        const controls = document.createElement("div");
-        controls.className = "controls";
-
-        const prevBtn = document.createElement("button");
-        prevBtn.textContent = "Previous";
-        prevBtn.onclick = () => {
-          index = (index - 1 + images.length) % images.length;
-          imgEl.src = images[index].url;
-          descEl.textContent = images[index].desc || "";
+        // Expand/Collapse button
+        const expandBtn = document.createElement('button');
+        expandBtn.textContent = 'Collapse';
+        expandBtn.onclick = () => {
+            const content = card.querySelectorAll('.image-container, .page-desc, .controls, .sub-links-container');
+            const isCollapsed = expandBtn.textContent === 'Expand';
+            content.forEach(c => c.style.display = isCollapsed ? 'block' : 'none');
+            expandBtn.textContent = isCollapsed ? 'Collapse' : 'Expand';
         };
+        card.appendChild(expandBtn);
 
-        const nextBtn = document.createElement("button");
-        nextBtn.textContent = "Next";
-        nextBtn.onclick = () => {
-          index = (index + 1) % images.length;
-          imgEl.src = images[index].url;
-          descEl.textContent = images[index].desc || "";
-        };
+        // General description
+        const generalDesc = document.createElement('div');
+        generalDesc.className = 'page-desc';
+        generalDesc.textContent = generalDescText;
+        card.appendChild(generalDesc);
 
-        const subBtn = document.createElement("button");
-        subBtn.textContent = "Add Sub Links";
-        subBtn.onclick = () => showSubLinkChooser(summaryData.title, card);
+        // Images
+        let images = cachedImages[bestTitle] || [];
+        if(images.length===0){
+            const imageRes = await fetch(
+                `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(bestTitle)}&prop=images&format=json&origin=*`
+            );
+            const imageData = await imageRes.json();
+            const page = Object.values(imageData.query.pages)[0];
+            const imageTitles = (page.images || []).map(img => img.title).filter(t => /\.(jpg|jpeg|png|gif)$/i.test(t)).slice(0,10);
 
-        controls.appendChild(prevBtn);
-        controls.appendChild(nextBtn);
-        controls.appendChild(subBtn);
+            images = [];
+            for(const imgTitle of imageTitles){
+                const infoRes = await fetch(
+                    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(imgTitle)}&prop=imageinfo&iiprop=url|extmetadata&format=json&origin=*`
+                );
+                const infoData = await infoRes.json();
+                const filePage = Object.values(infoData.query.pages)[0];
+                if(filePage?.imageinfo?.[0]?.url){
+                    images.push({
+                        url: filePage.imageinfo[0].url,
+                        desc: filePage.imageinfo[0].extmetadata?.ImageDescription?.value || ""
+                    });
+                }
+            }
+            cachedImages[bestTitle] = images;
+        }
 
-        card.appendChild(imgContainer);
-        card.appendChild(controls);
-      } else {
-        // No image found → still show Add Sub Links
-        const subBtn = document.createElement("button");
-        subBtn.textContent = "Add Sub Links";
-        subBtn.onclick = () => showSubLinkChooser(summaryData.title, card);
-        card.appendChild(subBtn);
-      }
+        // Carousel
+        if(images.length>0){
+            let index = 0;
+            const imgContainer = document.createElement('div');
+            imgContainer.className = 'image-container';
+            const imgEl = document.createElement('img');
+            imgEl.src = images[index].url;
+            imgContainer.appendChild(imgEl);
 
-    } catch (err) {
-      console.error("❌ Error fetching:", word, err);
-      card.innerHTML = `<p>Error loading ${word}</p>`;
+            const descEl = document.createElement('div');
+            descEl.className = 'desc';
+            descEl.textContent = images[index].desc || "";
+            imgContainer.appendChild(descEl);
+
+            const controls = document.createElement('div');
+            controls.className = 'controls';
+            const prevBtn = document.createElement('button');
+            prevBtn.textContent = 'Previous';
+            prevBtn.onclick = () => {
+                index = (index - 1 + images.length) % images.length;
+                imgEl.src = images[index].url;
+                descEl.textContent = images[index].desc || "";
+            };
+            const nextBtn = document.createElement('button');
+            nextBtn.textContent = 'Next';
+            nextBtn.onclick = () => {
+                index = (index + 1) % images.length;
+                imgEl.src = images[index].url;
+                descEl.textContent = images[index].desc || "";
+            };
+            controls.appendChild(prevBtn);
+            controls.appendChild(nextBtn);
+
+            card.appendChild(imgContainer);
+            card.appendChild(controls);
+        }
+
+        // Sub-links button
+        const subLinkContainer = document.createElement('div');
+        subLinkContainer.className = 'sub-links-container';
+        card.appendChild(subLinkContainer);
+
+        const subLinkBtn = document.createElement('button');
+        subLinkBtn.textContent = 'Find Sub-links';
+        subLinkContainer.appendChild(subLinkBtn);
+
+        subLinkBtn.onclick = async () => {
+            subLinkBtn.disabled = true;
+            const linksRes = await fetch(
+                `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(bestTitle)}&prop=links&format=json&origin=*`
+            );
+            const linksData = await linksRes.json();
+            const allLinks = linksData.parse?.links?.filter(l=>!l.exists||l.ns===0).map(l=>l['*']).slice(0,10) || [];
+
+            const checkContainer = document.createElement('div');
+            allLinks.forEach(l=>{
+                const item = document.createElement('div');
+                item.className = 'sub-link-item';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.value = l;
+                const label = document.createElement('label');
+                label.textContent = l;
+                item.appendChild(cb);
+                item.appendChild(label);
+                checkContainer.appendChild(item);
+            });
+            subLinkContainer.appendChild(checkContainer);
+
+            const scrapeBtn = document.createElement('button');
+            scrapeBtn.textContent = 'Scrape Selected';
+            scrapeBtn.onclick = async ()=>{
+                const selected = Array.from(checkContainer.querySelectorAll('input:checked')).map(i=>i.value);
+                for(const s of selected){
+                    await searchSingleWiki(s, card, cachedImages); // parent is card to show under parent
+                }
+            };
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.onclick = () => {
+                subLinkContainer.removeChild(checkContainer);
+                subLinkContainer.removeChild(scrapeBtn);
+                subLinkContainer.removeChild(cancelBtn);
+                subLinkBtn.disabled = false;
+            };
+            subLinkContainer.appendChild(scrapeBtn);
+            subLinkContainer.appendChild(cancelBtn);
+        }
+
+    }catch(e){
+        console.error(e);
+        card.innerHTML = `<h3>${word}</h3><p>Error fetching data.</p>`;
     }
-  }
-}
-
-// 🧩 Sub-link modal logic
-async function showSubLinkChooser(title, parentCard) {
-  console.log("🪄 Fetching sublinks for:", title);
-  try {
-    const res = await fetch(`https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=links&format=json&origin=*`);
-    const data = await res.json();
-
-    if (!data.parse?.links) {
-      alert("No sub-links found for this page.");
-      return;
-    }
-
-    const subLinks = data.parse.links.filter(l => !l["*"].includes(":")).map(l => l["*"]);
-    console.log("✅ Found sublinks:", subLinks);
-
-    const modal = document.getElementById("modalOverlay");
-    const modalLinks = document.getElementById("modalLinks");
-    modalLinks.innerHTML = "";
-
-    subLinks.forEach(link => {
-      const div = document.createElement("div");
-      div.innerHTML = `<label><input type="checkbox" value="${link}"> ${link}</label>`;
-      modalLinks.appendChild(div);
-    });
-
-    currentParentCard = parentCard;
-    modal.style.display = "flex";
-  } catch (err) {
-    console.error("❌ Error loading sublinks:", err);
-  }
-}
-
-document.getElementById("scrapeSelectedBtn").addEventListener("click", async () => {
-  const modalLinks = document.getElementById("modalLinks");
-  const selected = Array.from(modalLinks.querySelectorAll("input:checked")).map(i => i.value);
-  console.log("🟢 Scrape Selected:", selected);
-  closeModal();
-
-  if (selected.length > 0 && currentParentCard) {
-    await searchWiki(selected.join(","), currentParentCard);
-  }
-});
-
-document.getElementById("cancelBtn").addEventListener("click", closeModal);
-
-function closeModal() {
-  document.getElementById("modalOverlay").style.display = "none";
 }
 </script>
 </body>
